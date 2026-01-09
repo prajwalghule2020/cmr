@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -43,9 +44,10 @@ const careerGoals = [
 ];
 
 export default function ProfileSetup() {
-    const { user, updateProfile, setHasCompletedProfile } = useAuth();
+    const { user, updateProfile, setHasCompletedProfile, supabaseUser } = useAuth();
     const router = useRouter();
     const [isLoading, setIsLoading] = useState(false);
+    const supabase = createClient();
 
     const [formData, setFormData] = useState({
         currentRole: user?.currentRole || '',
@@ -84,16 +86,124 @@ export default function ProfileSetup() {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        
+        if (!supabaseUser) {
+            toast.error('You must be logged in to save your profile');
+            return;
+        }
+
         setIsLoading(true);
 
-        // Simulate API call
-        await new Promise(resolve => setTimeout(resolve, 800));
+        try {
+            // Save skills to userskills table if any skills are selected
+            if (formData.skills.length > 0) {
+                console.log('🔍 Saving skills for user:', supabaseUser.id);
+                console.log('📝 Skills to save:', formData.skills);
 
-        updateProfile(formData);
-        setHasCompletedProfile(true);
-        toast.success('Profile created successfully!');
-        router.push('/dashboard');
-        setIsLoading(false);
+                // Map the selected skills to the format expected by userskills table
+                const skillsToInsert = formData.skills.map(skillName => ({
+                    user_id: supabaseUser.id,
+                    skill_name: skillName.trim(),
+                    proficiency_level: 'intermediate', // Default proficiency
+                    years_of_experience: parseExperienceToYears(formData.experience),
+                    category: getCategoryForSkill(skillName),
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                }));
+
+                console.log('💾 Inserting skills:', skillsToInsert);
+
+                // First, delete existing skills for this user to avoid duplicates
+                const { error: deleteError } = await supabase
+                    .from('userskills')
+                    .delete()
+                    .eq('user_id', supabaseUser.id);
+
+                if (deleteError) {
+                    console.error('❌ Error deleting existing skills:', deleteError);
+                }
+
+                // Insert new skills
+                const { data, error } = await supabase
+                    .from('userskills')
+                    .insert(skillsToInsert)
+                    .select();
+
+                if (error) {
+                    console.error('❌ Error saving skills:', error);
+                    throw new Error(`Failed to save skills: ${error.message}`);
+                }
+
+                console.log('✅ Skills saved successfully:', data);
+            }
+
+            // Update profile in AuthContext
+            updateProfile(formData);
+            setHasCompletedProfile(true);
+            
+            toast.success('Profile created successfully!');
+            router.push('/dashboard');
+        } catch (error: any) {
+            console.error('❌ Error in handleSubmit:', error);
+            toast.error(error.message || 'Failed to save profile. Please try again.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Helper function to convert experience range to approximate years
+    const parseExperienceToYears = (experience: string): number => {
+        const experienceMap: { [key: string]: number } = {
+            '0-1': 0.5,
+            '1-3': 2,
+            '3-5': 4,
+            '5-10': 7,
+            '10+': 10
+        };
+        return experienceMap[experience] || 0;
+    };
+
+    // Helper function to determine category based on skill name
+    const getCategoryForSkill = (skillName: string): string => {
+        const skillName_lower = skillName.toLowerCase();
+        
+        // Programming skills
+        if (['javascript', 'typescript', 'python', 'java', 'c++', 'c#', 'ruby', 'php', 'go', 'rust'].some(s => skillName_lower.includes(s))) {
+            return 'programming';
+        }
+        
+        // Technical/DevOps skills
+        if (['aws', 'azure', 'docker', 'kubernetes', 'git', 'ci/cd', 'linux'].some(s => skillName_lower.includes(s))) {
+            return 'technical';
+        }
+        
+        // Framework/Library skills
+        if (['react', 'angular', 'vue', 'node.js', 'django', 'flask', 'spring'].some(s => skillName_lower.includes(s))) {
+            return 'programming';
+        }
+        
+        // Database skills
+        if (['sql', 'mongodb', 'postgresql', 'mysql', 'redis', 'database'].some(s => skillName_lower.includes(s))) {
+            return 'technical';
+        }
+        
+        // Design skills
+        if (['ui/ux', 'design', 'figma', 'photoshop', 'illustrator'].some(s => skillName_lower.includes(s))) {
+            return 'design';
+        }
+        
+        // Management skills
+        if (['product management', 'project management', 'agile', 'scrum'].some(s => skillName_lower.includes(s))) {
+            return 'management';
+        }
+        
+        // Data/ML skills
+        if (['machine learning', 'data analysis', 'data science', 'ai', 'tensorflow', 'pytorch'].some(s => skillName_lower.includes(s))) {
+            return 'analytical';
+        }
+        
+        // Default to 'other'
+        return 'other';
     };
 
     return (
